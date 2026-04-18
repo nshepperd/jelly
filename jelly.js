@@ -405,9 +405,10 @@
   };
 
   Stage = class Stage {
-    constructor(dom1, map) {
+    constructor(dom1, map, levelData) {
       var anchors, event, k, len, maybeSwallowEvent, ref;
       this.dom = dom1;
+      this.levelData = levelData;
       this.jellies = [];
       anchors = [];
       if (map[0] instanceof Array) {
@@ -482,9 +483,9 @@
               td.className = classname;
               tr.appendChild(td);
               if (color) {
-                cell = new JellyCell(color);
-                jelly = new Jelly(this, cell, x, y);
-                this.dom.appendChild(jelly.dom);
+                cell = new JellyCell(color, x, y);
+                jelly = new Jelly(this, cell);
+                this.dom.appendChild(cell.dom);
                 this.jellies.push(jelly);
                 this.num_monochromatic_blocks += 1;
                 if (!(color in colors)) {
@@ -756,12 +757,13 @@
   };
 
   JellyCell = class JellyCell {
-    constructor(color1) {
+    constructor(color1, x1, y1) {
       this.color = color1;
+      this.x = x1;
+      this.y = y1;
       this.dom = document.createElement('div');
       this.dom.className = 'cell jelly ' + this.color;
-      this.x = 0;
-      this.y = 0;
+      moveToCell(this.dom, this.x, this.y);
       this.color_master = this;
       this.color_mates = [this];
     }
@@ -799,33 +801,28 @@
   };
 
   Jelly = class Jelly {
-    constructor(stage, cell, x1, y1) {
-      this.x = x1;
-      this.y = y1;
-      this.dom = document.createElement('div');
-      this.updatePosition(this.x, this.y);
-      this.dom.className = 'cell jellybox';
+    constructor(stage, cell) {
       cell.jelly = this;
       this.cells = [cell];
-      this.dom.appendChild(cell.dom);
-      this.dom.addEventListener('contextmenu', (e) => {
-        return stage.trySlide(this, 1);
+      this.immovable = false;
+      // Use cell.jelly (not closure over this) so handlers follow merges.
+      cell.dom.addEventListener('contextmenu', function(e) {
+        return stage.trySlide(cell.jelly, 1);
       });
-      this.dom.addEventListener('click', (e) => {
-        return stage.trySlide(this, -1);
+      cell.dom.addEventListener('click', function(e) {
+        return stage.trySlide(cell.jelly, -1);
       });
-      this.dom.addEventListener('touchstart', (e) => {
-        return this.start = e.touches[0].pageX;
+      cell.dom.addEventListener('touchstart', function(e) {
+        return cell.jelly.start = e.touches[0].pageX;
       });
-      this.dom.addEventListener('touchmove', (e) => {
+      cell.dom.addEventListener('touchmove', function(e) {
         var dx;
-        dx = e.touches[0].pageX - this.start;
+        dx = e.touches[0].pageX - cell.jelly.start;
         if (Math.abs(dx) > 10) {
           dx = Math.max(Math.min(dx, 1), -1);
-          return stage.trySlide(this, dx);
+          return stage.trySlide(cell.jelly, dx);
         }
       });
-      this.immovable = false;
     }
 
     cellCoords() {
@@ -834,51 +831,49 @@
       results = [];
       for (k = 0, len = ref.length; k < len; k++) {
         cell = ref[k];
-        results.push([this.x + cell.x, this.y + cell.y, cell]);
+        results.push([cell.x, cell.y, cell]);
       }
       return results;
     }
 
-    updatePosition(x1, y1) {
-      this.x = x1;
-      this.y = y1;
-      return moveToCell(this.dom, this.x, this.y);
+    updatePosition(dx, dy) {
+      var cell, k, len, ref, results;
+      ref = this.cells;
+      results = [];
+      for (k = 0, len = ref.length; k < len; k++) {
+        cell = ref[k];
+        cell.x += dx;
+        cell.y += dy;
+        results.push(moveToCell(cell.dom, cell.x, cell.y));
+      }
+      return results;
     }
 
     merge(other) {
-      var cell, dx, dy, k, len, ref;
-      // Reposition other's cells as children of this jelly.
-      dx = other.x - this.x;
-      dy = other.y - this.y;
+      var cell, k, len, ref;
       ref = other.cells;
       for (k = 0, len = ref.length; k < len; k++) {
         cell = ref[k];
         this.cells.push(cell);
-        cell.x += dx;
-        cell.y += dy;
         cell.jelly = this;
-        moveToCell(cell.dom, cell.x, cell.y);
-        this.dom.appendChild(cell.dom);
       }
       if (other.immovable) {
         this.immovable = true;
       }
-      // Delete references from/to other.
       other.cells = null;
-      other.dom.parentNode.removeChild(other.dom);
     }
 
   };
 
   level = parseInt(location.search.substr(1), 10) || 1;
 
-  stage = new Stage(document.getElementById('map'), levels[level - 1]);
+  stage = new Stage(document.getElementById('map'), levels[level - 1], levels[level - 1]);
 
   window.stage = stage;
 
   levelPicker = document.getElementById('level');
 
-  for (i = k = 1, ref = levels.length; 1 <= ref ? k <= ref : k >= ref; i = 1 <= ref ? ++k : --k) {
+  for (i = k = 1, ref = levels.length; (1 <= ref ? k <= ref : k >= ref); i = 1 <= ref ? ++k : --k) {
     option = document.createElement('option');
     option.value = i;
     option.appendChild(document.createTextNode(`Level ${i}`));

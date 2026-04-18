@@ -294,7 +294,7 @@ moveToCell = (dom, x, y) ->
   dom.style.top = y * CELL_SIZE + 'px'
 
 class Stage
-  constructor: (@dom, map) ->
+  constructor: (@dom, map, @levelData) ->
     @jellies = []
     anchors = []
     if map[0] instanceof Array
@@ -339,9 +339,9 @@ class Stage
         td.className = classname
         tr.appendChild(td)
         if color
-          cell = new JellyCell(color)
-          jelly = new Jelly(this, cell, x, y)
-          @dom.appendChild(jelly.dom)
+          cell = new JellyCell(color, x, y)
+          jelly = new Jelly(this, cell)
+          @dom.appendChild(cell.dom)
           @jellies.push jelly
           @num_monochromatic_blocks += 1;
           @num_colors +=1 unless color of colors
@@ -495,11 +495,10 @@ class Wall
   constructor: (@dom) ->
 
 class JellyCell
-  constructor: (@color) ->
+  constructor: (@color, @x, @y) ->
     @dom = document.createElement('div')
     @dom.className = 'cell jelly ' + @color
-    @x = 0
-    @y = 0
+    moveToCell(@dom, @x, @y)
     @color_master = this
     @color_mates = [this]
 
@@ -523,60 +522,49 @@ class JellyCell
       for cell in other_master.color_mates
         cell.color_master = @color_master
       @color_master.color_mates =
-        @color_master.color_mates.concat(other_master.color_mates)  
+        @color_master.color_mates.concat(other_master.color_mates)
     if other instanceof JellyCell and @jelly != other.jelly
       @jelly.merge(other.jelly)
 
 
 class Jelly
-  constructor: (stage, cell, @x, @y) ->
-    @dom = document.createElement('div')
-    @updatePosition(@x, @y)
-    @dom.className = 'cell jellybox'
+  constructor: (stage, cell) ->
     cell.jelly = this
     @cells = [cell]
-    @dom.appendChild(cell.dom)
-
-    @dom.addEventListener 'contextmenu', (e) =>
-      stage.trySlide(this, 1)
-    @dom.addEventListener 'click', (e) =>
-      stage.trySlide(this, -1)
-
-    @dom.addEventListener 'touchstart', (e) =>
-      @start = e.touches[0].pageX
-    @dom.addEventListener 'touchmove', (e) =>
-      dx = e.touches[0].pageX - @start
-      if Math.abs(dx) > 10
-        dx = Math.max(Math.min(dx, 1), -1)
-        stage.trySlide(this, dx)
     @immovable = false
 
+    # Use cell.jelly (not closure over this) so handlers follow merges.
+    cell.dom.addEventListener 'contextmenu', (e) ->
+      stage.trySlide(cell.jelly, 1)
+    cell.dom.addEventListener 'click', (e) ->
+      stage.trySlide(cell.jelly, -1)
+    cell.dom.addEventListener 'touchstart', (e) ->
+      cell.jelly.start = e.touches[0].pageX
+    cell.dom.addEventListener 'touchmove', (e) ->
+      dx = e.touches[0].pageX - cell.jelly.start
+      if Math.abs(dx) > 10
+        dx = Math.max(Math.min(dx, 1), -1)
+        stage.trySlide(cell.jelly, dx)
+
   cellCoords: ->
-    [@x + cell.x, @y + cell.y, cell] for cell in @cells
+    [cell.x, cell.y, cell] for cell in @cells
 
-  updatePosition: (@x, @y) ->
-    moveToCell @dom, @x, @y
-
-  merge: (other) ->
-    # Reposition other's cells as children of this jelly.
-    dx = other.x - this.x
-    dy = other.y - this.y
-    for cell in other.cells
-      @cells.push cell
+  updatePosition: (dx, dy) ->
+    for cell in @cells
       cell.x += dx
       cell.y += dy
-      cell.jelly = this
       moveToCell cell.dom, cell.x, cell.y
-      @dom.appendChild(cell.dom)
 
+  merge: (other) ->
+    for cell in other.cells
+      @cells.push cell
+      cell.jelly = this
     @immovable = true if other.immovable
-    # Delete references from/to other.
     other.cells = null
-    other.dom.parentNode.removeChild(other.dom)
     return
 
 level = parseInt(location.search.substr(1), 10) or 1
-stage = new Stage(document.getElementById('map'), levels[level-1])
+stage = new Stage(document.getElementById('map'), levels[level-1], levels[level-1])
 window.stage = stage
 
 levelPicker = document.getElementById('level')
