@@ -965,22 +965,13 @@
     addCellHandlers(cell) {
       var stage;
       stage = this;
-      cell.dom.addEventListener('contextmenu', function(e) {
-        return stage.trySlide(cell.jelly, 1);
+      cell.dom.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        return stage.startDrag(cell, e.pageX, 'mouse');
       });
-      cell.dom.addEventListener('click', function(e) {
-        return stage.trySlide(cell.jelly, -1);
-      });
-      cell.dom.addEventListener('touchstart', function(e) {
-        return cell.jelly.start = e.touches[0].pageX;
-      });
-      return cell.dom.addEventListener('touchmove', function(e) {
-        var dx;
-        dx = e.touches[0].pageX - cell.jelly.start;
-        if (Math.abs(dx) > 10) {
-          dx = Math.max(Math.min(dx, 1), -1);
-          return stage.trySlide(cell.jelly, dx);
-        }
+      return cell.dom.addEventListener('touchstart', function(e) {
+        e.preventDefault();
+        return stage.startDrag(cell, e.touches[0].pageX, 'touch');
       });
     }
 
@@ -1139,6 +1130,188 @@
           turn.merges = this.game.doMerges();
           this.applyMergeVisuals(turn.merges);
           return this.busy = false;
+        };
+        if (turn.falls.length > 0) {
+          return this.waitForAnimation(afterFall);
+        } else {
+          return afterFall();
+        }
+      });
+    }
+
+    startDrag(cell, startX, mode) {
+      if (this.busy || this.dragState) {
+        return;
+      }
+      this.dragState = {
+        cell: cell,
+        startX: startX,
+        lastDx: 0,
+        ghostCells: [],
+        mode: mode
+      };
+      if (mode === 'mouse') {
+        this._onMove = (e) => {
+          return this.updateDrag(e.pageX);
+        };
+        this._onEnd = () => {
+          return this.endDrag();
+        };
+        document.addEventListener('mousemove', this._onMove);
+        return document.addEventListener('mouseup', this._onEnd);
+      } else {
+        this._onMove = (e) => {
+          e.preventDefault();
+          return this.updateDrag(e.touches[0].pageX);
+        };
+        this._onEnd = () => {
+          return this.endDrag();
+        };
+        document.addEventListener('touchmove', this._onMove);
+        return document.addEventListener('touchend', this._onEnd);
+      }
+    }
+
+    updateDrag(pageX) {
+      var dx, pixelDx;
+      if (!this.dragState) {
+        return;
+      }
+      pixelDx = pageX - this.dragState.startX;
+      dx = Math.round(pixelDx / CELL_SIZE);
+      if (dx === this.dragState.lastDx) {
+        return;
+      }
+      this.dragState.lastDx = dx;
+      return this.updateGhost(dx);
+    }
+
+    updateGhost(dx) {
+      var cell, cellSet, clone, count, dir, dom, down, ghost, i, jelly, k, l, len, len1, len2, len3, m, n, o, ref, ref1, ref2, ref3, ref4, result, results, right, startCell;
+      ref = this.dragState.ghostCells;
+      // Remove old ghost.
+      for (k = 0, len = ref.length; k < len; k++) {
+        dom = ref[k];
+        dom.parentNode.removeChild(dom);
+      }
+      this.dragState.ghostCells = [];
+      this.dom.classList.remove('dragging');
+      if (dx === 0) {
+        return;
+      }
+      this.dom.classList.add('dragging');
+      // Simulate moves on cloned state.
+      clone = this.game.clone();
+      startCell = clone.cells[this.dragState.cell.y][this.dragState.cell.x];
+      if (!(startCell && startCell.jelly)) {
+        return;
+      }
+      dir = dx > 0 ? 1 : -1;
+      count = Math.abs(dx);
+      for (i = l = 0, ref1 = count; (0 <= ref1 ? l < ref1 : l > ref1); i = 0 <= ref1 ? ++l : --l) {
+        result = clone.tryMove(startCell.jelly, dir);
+        if (!result) {
+          break;
+        }
+      }
+      ref2 = clone.jellies;
+      // Create ghost DOM elements.
+      for (m = 0, len1 = ref2.length; m < len1; m++) {
+        jelly = ref2[m];
+        ref3 = jelly.cells;
+        for (n = 0, len2 = ref3.length; n < len2; n++) {
+          cell = ref3[n];
+          ghost = document.createElement('div');
+          ghost.className = 'cell jelly ghost ' + cell.color;
+          moveToCell(ghost, cell.x, cell.y);
+          cell.dom = ghost;
+          this.dom.appendChild(ghost);
+          this.dragState.ghostCells.push(ghost);
+        }
+      }
+      ref4 = clone.jellies;
+      // Remove internal borders between cells in the same jelly.
+      results = [];
+      for (o = 0, len3 = ref4.length; o < len3; o++) {
+        jelly = ref4[o];
+        cellSet = new Set(jelly.cells);
+        results.push((function() {
+          var len4, p, ref5, ref6, ref7, results1;
+          ref5 = jelly.cells;
+          results1 = [];
+          for (p = 0, len4 = ref5.length; p < len4; p++) {
+            cell = ref5[p];
+            right = (ref6 = clone.cells[cell.y]) != null ? ref6[cell.x + 1] : void 0;
+            if (right && cellSet.has(right)) {
+              cell.dom.style.borderRight = 'none';
+              right.dom.style.borderLeft = 'none';
+            }
+            down = (ref7 = clone.cells[cell.y + 1]) != null ? ref7[cell.x] : void 0;
+            if (down && cellSet.has(down)) {
+              cell.dom.style.borderBottom = 'none';
+              results1.push(down.dom.style.borderTop = 'none');
+            } else {
+              results1.push(void 0);
+            }
+          }
+          return results1;
+        })());
+      }
+      return results;
+    }
+
+    endDrag() {
+      var cell, count, dir, dom, dx, k, len, ref;
+      if (this.dragState.mode === 'mouse') {
+        document.removeEventListener('mousemove', this._onMove);
+        document.removeEventListener('mouseup', this._onEnd);
+      } else {
+        document.removeEventListener('touchmove', this._onMove);
+        document.removeEventListener('touchend', this._onEnd);
+      }
+      ref = this.dragState.ghostCells;
+      // Remove ghost.
+      for (k = 0, len = ref.length; k < len; k++) {
+        dom = ref[k];
+        dom.parentNode.removeChild(dom);
+      }
+      this.dom.classList.remove('dragging');
+      dx = this.dragState.lastDx;
+      cell = this.dragState.cell;
+      this.dragState = null;
+      if (dx === 0) {
+        return;
+      }
+      // Execute actual moves with animation.
+      dir = dx > 0 ? 1 : -1;
+      count = Math.abs(dx);
+      this.busy = true;
+      return this.executeMultipleMoves(cell, dir, count, () => {
+        return this.busy = false;
+      });
+    }
+
+    executeMultipleMoves(cell, dir, count, cb) {
+      var jelly, slide, turn;
+      if (count <= 0) {
+        return cb();
+      }
+      jelly = cell.jelly;
+      slide = this.game.doSlide(jelly, dir);
+      if (!slide) {
+        return cb();
+      }
+      turn = {slide};
+      this.history.push(turn);
+      this.syncDOM();
+      return this.waitForAnimation(() => {
+        var afterFall;
+        turn.falls = this.game.doFalls();
+        this.syncDOM();
+        afterFall = () => {
+          turn.merges = this.game.doMerges();
+          this.applyMergeVisuals(turn.merges);
+          return this.executeMultipleMoves(cell, dir, count - 1, cb);
         };
         if (turn.falls.length > 0) {
           return this.waitForAnimation(afterFall);

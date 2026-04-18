@@ -125,6 +125,15 @@ select#level {
   border-right: 32px solid transparent;
 }
 
+#map.dragging .jelly:not(.ghost) {
+  opacity: 0.3;
+}
+.ghost {
+  opacity: 0.7;
+  pointer-events: none;
+  -webkit-transition: none !important;
+  transition: none !important;
+}
 .jelly {
   position: absolute;
   cursor: ew-resize;

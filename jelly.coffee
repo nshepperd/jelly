@@ -610,17 +610,12 @@ class Stage
 
   addCellHandlers: (cell) ->
     stage = this
-    cell.dom.addEventListener 'contextmenu', (e) ->
-      stage.trySlide(cell.jelly, 1)
-    cell.dom.addEventListener 'click', (e) ->
-      stage.trySlide(cell.jelly, -1)
+    cell.dom.addEventListener 'mousedown', (e) ->
+      e.preventDefault()
+      stage.startDrag(cell, e.pageX, 'mouse')
     cell.dom.addEventListener 'touchstart', (e) ->
-      cell.jelly.start = e.touches[0].pageX
-    cell.dom.addEventListener 'touchmove', (e) ->
-      dx = e.touches[0].pageX - cell.jelly.start
-      if Math.abs(dx) > 10
-        dx = Math.max(Math.min(dx, 1), -1)
-        stage.trySlide(cell.jelly, dx)
+      e.preventDefault()
+      stage.startDrag(cell, e.touches[0].pageX, 'touch')
 
   placeAnchors: (anchors) ->
     directions =
@@ -716,6 +711,125 @@ class Stage
         turn.merges = @game.doMerges()
         @applyMergeVisuals(turn.merges)
         @busy = false
+      if turn.falls.length > 0
+        @waitForAnimation afterFall
+      else
+        afterFall()
+
+  startDrag: (cell, startX, mode) ->
+    return if @busy or @dragState
+    @dragState =
+      cell: cell
+      startX: startX
+      lastDx: 0
+      ghostCells: []
+      mode: mode
+    if mode == 'mouse'
+      @_onMove = (e) => @updateDrag(e.pageX)
+      @_onEnd = => @endDrag()
+      document.addEventListener('mousemove', @_onMove)
+      document.addEventListener('mouseup', @_onEnd)
+    else
+      @_onMove = (e) =>
+        e.preventDefault()
+        @updateDrag(e.touches[0].pageX)
+      @_onEnd = => @endDrag()
+      document.addEventListener('touchmove', @_onMove)
+      document.addEventListener('touchend', @_onEnd)
+
+  updateDrag: (pageX) ->
+    return unless @dragState
+    pixelDx = pageX - @dragState.startX
+    dx = Math.round(pixelDx / CELL_SIZE)
+    return if dx == @dragState.lastDx
+    @dragState.lastDx = dx
+    @updateGhost(dx)
+
+  updateGhost: (dx) ->
+    # Remove old ghost.
+    for dom in @dragState.ghostCells
+      dom.parentNode.removeChild(dom)
+    @dragState.ghostCells = []
+    @dom.classList.remove('dragging')
+
+    return if dx == 0
+    @dom.classList.add('dragging')
+
+    # Simulate moves on cloned state.
+    clone = @game.clone()
+    startCell = clone.cells[@dragState.cell.y][@dragState.cell.x]
+    return unless startCell and startCell.jelly
+
+    dir = if dx > 0 then 1 else -1
+    count = Math.abs(dx)
+    for i in [0...count]
+      result = clone.tryMove(startCell.jelly, dir)
+      break unless result
+
+    # Create ghost DOM elements.
+    for jelly in clone.jellies
+      for cell in jelly.cells
+        ghost = document.createElement('div')
+        ghost.className = 'cell jelly ghost ' + cell.color
+        moveToCell(ghost, cell.x, cell.y)
+        cell.dom = ghost
+        @dom.appendChild(ghost)
+        @dragState.ghostCells.push(ghost)
+
+    # Remove internal borders between cells in the same jelly.
+    for jelly in clone.jellies
+      cellSet = new Set(jelly.cells)
+      for cell in jelly.cells
+        right = clone.cells[cell.y]?[cell.x + 1]
+        if right and cellSet.has(right)
+          cell.dom.style.borderRight = 'none'
+          right.dom.style.borderLeft = 'none'
+        down = clone.cells[cell.y + 1]?[cell.x]
+        if down and cellSet.has(down)
+          cell.dom.style.borderBottom = 'none'
+          down.dom.style.borderTop = 'none'
+
+  endDrag: ->
+    if @dragState.mode == 'mouse'
+      document.removeEventListener('mousemove', @_onMove)
+      document.removeEventListener('mouseup', @_onEnd)
+    else
+      document.removeEventListener('touchmove', @_onMove)
+      document.removeEventListener('touchend', @_onEnd)
+
+    # Remove ghost.
+    for dom in @dragState.ghostCells
+      dom.parentNode.removeChild(dom)
+    @dom.classList.remove('dragging')
+
+    dx = @dragState.lastDx
+    cell = @dragState.cell
+    @dragState = null
+
+    return if dx == 0
+
+    # Execute actual moves with animation.
+    dir = if dx > 0 then 1 else -1
+    count = Math.abs(dx)
+    @busy = true
+    @executeMultipleMoves(cell, dir, count, => @busy = false)
+
+  executeMultipleMoves: (cell, dir, count, cb) ->
+    return cb() if count <= 0
+    jelly = cell.jelly
+    slide = @game.doSlide(jelly, dir)
+    unless slide
+      return cb()
+    turn = { slide }
+    @history.push(turn)
+    @syncDOM()
+    @waitForAnimation =>
+      turn.falls = @game.doFalls()
+      @syncDOM()
+      afterFall = =>
+        turn.merges = @game.doMerges()
+        @applyMergeVisuals(turn.merges)
+        @executeMultipleMoves(cell, dir, count - 1, cb)
       if turn.falls.length > 0
         @waitForAnimation afterFall
       else
