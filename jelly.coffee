@@ -674,9 +674,10 @@ levelPicker.value = level
 levelPicker.addEventListener 'change', () ->
   location.search = '?' + levelPicker.value
 
-document.getElementById('undo').addEventListener 'click', ->
-  result = stage.undo()
-  stage = result if result
+undoHandler = -> stage.undo()
+document.getElementById('undo').addEventListener 'click', undoHandler
+document.addEventListener 'keydown', (e) ->
+  undoHandler() if e.key == 'Backspace'
 
 document.getElementById('reset').addEventListener 'click', ->
   stage.dom.innerHTML = ''
