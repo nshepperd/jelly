@@ -302,6 +302,7 @@ class Stage
       map = map[0]
     @num_monochromatic_blocks = 0
     @num_colors = 0
+    @moveHistory = []
     @loadMap(map, anchors)
 
     # Capture and swallow all click events during animations.
@@ -414,6 +415,8 @@ class Stage
   trySlide: (jelly, dir) ->
     jellies = [jelly]
     return if @checkFilled(jellies, dir, 0)
+    coords = jelly.cellCoords()[0]
+    @moveHistory.push({x: coords[0], y: coords[1], dir: dir})
     @busy = true
     @move(jellies, dir, 0)
     @waitForAnimation () =>
@@ -421,9 +424,38 @@ class Stage
         @checkForMerges()
         @busy = false
 
+  trySlideInstant: (jelly, dir) ->
+    jellies = [jelly]
+    return if @checkFilled(jellies, dir, 0)
+    @move(jellies, dir, 0)
+    @instantFall()
+    @checkForMerges()
+
+  instantFall: ->
+    try_again = true
+    while try_again
+      try_again = false
+      for jelly in @jellies
+        jellyset = [jelly]
+        if not @checkFilled(jellyset, 0, 1)
+          @move(jellyset, 0, 1)
+          try_again = true
+
+  undo: ->
+    return if @busy or @moveHistory.length == 0
+    history = @moveHistory.slice(0, -1)
+    @dom.innerHTML = ''
+    newStage = new Stage(@dom, @levelData, @levelData)
+    for entry in history
+      cell = newStage.cells[entry.y][entry.x]
+      if cell and cell.jelly
+        newStage.trySlideInstant(cell.jelly, entry.dir)
+    newStage.moveHistory = history
+    return newStage
+
   move: (jellies, dx, dy) ->
     @cells[y][x] = null for [x, y, cell] in jelly.cellCoords() for jelly in jellies
-    jelly.updatePosition(jelly.x+dx, jelly.y+dy) for jelly in jellies
+    jelly.updatePosition(dx, dy) for jelly in jellies
     @cells[y][x] = cell for [x, y, cell] in jelly.cellCoords() for jelly in jellies
     return
 
@@ -577,6 +609,10 @@ levelPicker.value = level
 levelPicker.addEventListener 'change', () ->
   location.search = '?' + levelPicker.value
 
+document.getElementById('undo').addEventListener 'click', ->
+  result = stage.undo()
+  stage = result if result
+
 document.getElementById('reset').addEventListener 'click', ->
   stage.dom.innerHTML = ''
-  stage = new Stage(stage.dom, levels[level-1])
+  stage = new Stage(stage.dom, levels[level-1], levels[level-1])

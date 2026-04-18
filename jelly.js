@@ -417,6 +417,7 @@
       }
       this.num_monochromatic_blocks = 0;
       this.num_colors = 0;
+      this.moveHistory = [];
       this.loadMap(map, anchors);
       // Capture and swallow all click events during animations.
       this.busy = false;
@@ -595,11 +596,17 @@
     }
 
     trySlide(jelly, dir) {
-      var jellies;
+      var coords, jellies;
       jellies = [jelly];
       if (this.checkFilled(jellies, dir, 0)) {
         return;
       }
+      coords = jelly.cellCoords()[0];
+      this.moveHistory.push({
+        x: coords[0],
+        y: coords[1],
+        dir: dir
+      });
       this.busy = true;
       this.move(jellies, dir, 0);
       return this.waitForAnimation(() => {
@@ -608,6 +615,62 @@
           return this.busy = false;
         });
       });
+    }
+
+    trySlideInstant(jelly, dir) {
+      var jellies;
+      jellies = [jelly];
+      if (this.checkFilled(jellies, dir, 0)) {
+        return;
+      }
+      this.move(jellies, dir, 0);
+      this.instantFall();
+      return this.checkForMerges();
+    }
+
+    instantFall() {
+      var jelly, jellyset, results, try_again;
+      try_again = true;
+      results = [];
+      while (try_again) {
+        try_again = false;
+        results.push((function() {
+          var k, len, ref, results1;
+          ref = this.jellies;
+          results1 = [];
+          for (k = 0, len = ref.length; k < len; k++) {
+            jelly = ref[k];
+            jellyset = [jelly];
+            if (!this.checkFilled(jellyset, 0, 1)) {
+              this.move(jellyset, 0, 1);
+              results1.push(try_again = true);
+            } else {
+              results1.push(void 0);
+            }
+          }
+          return results1;
+        }).call(this));
+      }
+      return results;
+    }
+
+    undo() {
+      var cell, entry, history, k, len, newStage;
+      if (this.busy || this.moveHistory.length === 0) {
+        return;
+      }
+      history = this.moveHistory.slice(0, -1);
+      this.dom.innerHTML = '';
+      newStage = new Stage(this.dom, this.levelData, this.levelData);
+      for (k = 0, len = history.length; k < len; k++) {
+        entry = history[k];
+        cell = newStage.cells[entry.y][entry.x];
+        if (cell && cell.jelly) {
+          newStage.trySlideInstant(cell.jelly, entry.dir);
+        }
+      }
+      newStage.moveHistory = history;
+      return newStage;
     }
 
     move(jellies, dx, dy) {
@@ -622,7 +685,7 @@
       }
       for (m = 0, len2 = jellies.length; m < len2; m++) {
         jelly = jellies[m];
-        jelly.updatePosition(jelly.x + dx, jelly.y + dy);
+        jelly.updatePosition(dx, dy);
       }
       for (n = 0, len3 = jellies.length; n < len3; n++) {
         jelly = jellies[n];
@@ -886,9 +949,17 @@
     return location.search = '?' + levelPicker.value;
   });
 
+  document.getElementById('undo').addEventListener('click', function() {
+    var result;
+    result = stage.undo();
+    if (result) {
+      return stage = result;
+    }
+  });
+
   document.getElementById('reset').addEventListener('click', function() {
     stage.dom.innerHTML = '';
-    return stage = new Stage(stage.dom, levels[level - 1]);
+    return stage = new Stage(stage.dom, levels[level - 1], levels[level - 1]);
   });
 
 }).call(this);
