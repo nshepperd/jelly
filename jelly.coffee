@@ -293,139 +293,66 @@ moveToCell = (dom, x, y) ->
   dom.style.left = x * CELL_SIZE + 'px'
   dom.style.top = y * CELL_SIZE + 'px'
 
-class Stage
-  constructor: (@dom, map, @levelData) ->
+########################################
+# Game layer — pure logic, no DOM
+########################################
+
+BORDERS =
+  'left':  ['borderLeft',   'borderRight']
+  'right': ['borderRight',  'borderLeft']
+  'up':    ['borderTop',    'borderBottom']
+  'down':  ['borderBottom', 'borderTop']
+
+class GameCell
+  constructor: (@color, @x, @y) ->
+    @jelly = null
+    @color_master = this
+    @color_mates = [this]
+
+  mergeWith: (other, dir) ->
+    # If merging with wall, jelly becomes immovable.
+    @jelly.immovable = true if other instanceof Wall
+
+    # If merging with jelly, unify the jellies and color mates' lists.
+    if other instanceof GameCell and @color == other.color and @color_master != other.color_master
+      other_master = other.color_master
+      for cell in other_master.color_mates
+        cell.color_master = @color_master
+      @color_master.color_mates =
+        @color_master.color_mates.concat(other_master.color_mates)
+    if other instanceof GameCell and @jelly != other.jelly
+      @jelly.merge(other.jelly)
+
+
+class GameJelly
+  constructor: (cell) ->
+    cell.jelly = this
+    @cells = [cell]
+    @immovable = false
+
+  cellCoords: ->
+    [cell.x, cell.y, cell] for cell in @cells
+
+  updatePosition: (dx, dy) ->
+    for cell in @cells
+      cell.x += dx
+      cell.y += dy
+
+  merge: (other) ->
+    for cell in other.cells
+      @cells.push cell
+      cell.jelly = this
+    @immovable = true if other.immovable
+    other.cells = null
+    return
+
+
+class GameState
+  constructor: ->
+    @cells = null
     @jellies = []
-    anchors = []
-    if map[0] instanceof Array
-      anchors = map[1]
-      map = map[0]
     @num_monochromatic_blocks = 0
     @num_colors = 0
-    @history = []
-    @currentTurn = null
-    @loadMap(map, anchors)
-
-    # Capture and swallow all click events during animations.
-    @busy = false
-    maybeSwallowEvent = (e) =>
-      e.preventDefault()
-      e.stopPropagation() if @busy
-    for event in ['contextmenu', 'click', 'touchstart', 'touchmove']
-      @dom.addEventListener(event, maybeSwallowEvent, true)
-
-    @checkForMerges()
-
-  loadMap: (map, anchors) ->
-    table = document.createElement('table')
-    @dom.appendChild(table)
-    colors = {}
-    @cells = for y in [0...map.length]
-      row = map[y].split('')
-      tr = document.createElement('tr')
-      table.appendChild(tr)
-      for x in [0...row.length]
-        color = null
-        classname = 'transparent'
-        cell = null
-        td = document.createElement('td')
-        switch row[x]
-          when 'x'
-            classname = 'cell wall'
-            cell = new Wall(td)
-          when 'r' then color = 'red'
-          when 'g' then color = 'green'
-          when 'b' then color = 'blue'
-          when '0','1','2','3','4','5','6','7','8','9'
-            color = 'black' + row[x]
-        td.className = classname
-        tr.appendChild(td)
-        if color
-          cell = new JellyCell(color, x, y)
-          jelly = new Jelly(this, cell)
-          @dom.appendChild(cell.dom)
-          @jellies.push jelly
-          @num_monochromatic_blocks += 1;
-          @num_colors +=1 unless color of colors
-          colors[color] = 1
-        cell
-    @addBorders()
-    @placeAnchors(anchors)
-    return
-
-  placeAnchors: (anchors) ->
-    directions = {
-      'left':  [-1,  0, 'leftarrow', 'borderRightColor'],
-      'right': [ 1,  0, 'rightarrow', 'borderLeftColor'],
-      'up':    [ 0, -1, 'uparrow', 'borderBottomColor'],
-      'down':  [ 0,  1, 'downarrow', 'borderTopColor'],
-    }
-    colors = {
-      'red'  : 'hsl(0, 100%, 75%)'
-      'green': 'hsl(120, 100%, 45%)'
-      'blue' : 'hsl(216, 100%, 70%)'
-    }
-    for anchor in anchors
-      dx = directions[anchor.dir][0]
-      dy = directions[anchor.dir][1]
-      classname = directions[anchor.dir][2]
-      property = directions[anchor.dir][3]
-      
-      me = @cells[anchor.y][anchor.x]
-      other = @cells[anchor.y + dy][anchor.x + dx]
-      me.mergeWith(other, anchor.dir)
-
-      # Create the overlapping anchoring triangle.
-      arrow = document.createElement('div')
-      arrow.style[property] = colors[me.color]
-      arrow.className = classname
-      other.dom.appendChild(arrow)
-    @jellies = (jelly for jelly in @jellies when jelly.cells)
-
-  addBorders: ->
-    for y in [0...@cells.length]
-      for x in [0...@cells[0].length]
-        cell = @cells[y][x]
-        continue unless cell instanceof Wall
-        border = 'solid 1px #777'
-        edges = [
-          ['borderBottom',  0,  1],
-          ['borderTop',     0, -1],
-          ['borderLeft',   -1,  0],
-          ['borderRight',   1,  0],
-        ]
-        for [attr, dx, dy] in edges
-          continue unless 0 <= (y+dy) < @cells.length
-          continue unless 0 <= (x+dx) < @cells[0].length
-          other = @cells[y+dy][x+dx]
-          cell.dom.style[attr] = border unless other instanceof Wall
-    return
-
-  waitForAnimation: (cb) ->
-    names = ['transitionend', 'webkitTransitionEnd']
-    end = () =>
-      @dom.removeEventListener(name, end) for name in names
-      # Wait one call stack before continuing.  This is necessary if there
-      # are multiple pending end transition events (multiple jellies moving);
-      # we want to wait for them all here and not accidentally catch them
-      # in a subsequent waitForAnimation.
-      setTimeout(cb, 0)
-    @dom.addEventListener(name, end) for name in names
-    return
-
-  trySlide: (jelly, dir) ->
-    jellies = [jelly]
-    return if @checkFilled(jellies, dir, 0)
-    turn = { slide: { jellies: jellies.slice(), dx: dir }, falls: [], merges: [] }
-    @currentTurn = turn
-    @history.push(turn)
-    @busy = true
-    @move(jellies, dir, 0)
-    @waitForAnimation () =>
-      @checkFall =>
-        @checkForMerges()
-        @currentTurn = null
-        @busy = false
 
   move: (jellies, dx, dy) ->
     @cells[y][x] = null for [x, y, cell] in jelly.cellCoords() for jelly in jellies
@@ -449,13 +376,17 @@ class Stage
           break
     return false
 
-  checkFall: (cb) ->
-    # Snapshot positions before falling.
+  doSlide: (jelly, dir) ->
+    jellies = [jelly]
+    return null if @checkFilled(jellies, dir, 0)
+    @move(jellies, dir, 0)
+    { jellies: jellies, dx: dir }
+
+  doFalls: ->
     preFall = new Map()
     for jelly in @jellies
       preFall.set(jelly, jelly.cells[0].y)
 
-    moved = false
     try_again = true
     while try_again
       try_again = false
@@ -464,60 +395,46 @@ class Stage
         if not @checkFilled(jellyset, 0, 1)
           @move(jellyset, 0, 1)
           try_again = true
-          moved = true
 
-    # Record fall distances.
-    if @currentTurn
-      for jelly in @jellies
-        oldY = preFall.get(jelly)
-        dy = jelly.cells[0].y - oldY
-        @currentTurn.falls.push({jelly, dy}) if dy > 0
+    falls = []
+    for jelly in @jellies
+      oldY = preFall.get(jelly)
+      dy = jelly.cells[0].y - oldY
+      falls.push({jelly, dy}) if dy > 0
+    falls
 
-    if moved
-      @waitForAnimation cb
-    else
-      cb()
-    return
-
-  checkForMerges: ->
-    merged = false
-    while @doOneMerge()
-      merged = true
-    @checkForCompletion() if merged
-    return
-
-  checkForCompletion: ->
-    if @num_monochromatic_blocks <= @num_colors
-      alert("Congratulations! Level completed.")
-    return
+  doMerges: ->
+    merges = []
+    while true
+      rec = @doOneMerge()
+      break unless rec
+      merges.push(rec)
+    @checkForCompletion() if merges.length > 0
+    merges
 
   doOneMerge: ->
     for jelly in @jellies
       for [x, y, cell] in jelly.cellCoords()
-        # Only look right and down; left and up are handled by that side
-        # itself looking right and down.
         for [dx, dy, dir] in [[1, 0, 'right'], [0, 1, 'down']]
           other = @cells[y + dy][x + dx]
-          continue unless other and other instanceof JellyCell
+          continue unless other and other instanceof GameCell
           continue if cell['merged' + dir]
           continue unless other.color == cell.color
 
-          # Record merge before it happens.
-          if @currentTurn
-            sameJelly = jelly == other.jelly
-            @currentTurn.merges.push
-              cell: cell
-              other: other
-              dir: dir
-              sameJelly: sameJelly
-              absorbedJelly: if sameJelly then null else other.jelly
-              absorbedCells: if sameJelly then null else other.jelly.cells.slice()
-              absorberImmovable: jelly.immovable
-              differentMaster: cell.color_master != other.color_master
-              cellMaster: cell.color_master
-              cellMates: cell.color_master.color_mates.slice()
-              otherMaster: other.color_master
-              otherMates: other.color_master.color_mates.slice()
+          sameJelly = jelly == other.jelly
+          rec =
+            cell: cell
+            other: other
+            dir: dir
+            sameJelly: sameJelly
+            absorbedJelly: if sameJelly then null else other.jelly
+            absorbedCells: if sameJelly then null else other.jelly.cells.slice()
+            absorberImmovable: jelly.immovable
+            differentMaster: cell.color_master != other.color_master
+            cellMaster: cell.color_master
+            cellMates: cell.color_master.color_mates.slice()
+            otherMaster: other.color_master
+            otherMates: other.color_master.color_mates.slice()
 
           if jelly != other.jelly
             @jellies = @jellies.filter (j) -> j != other.jelly
@@ -525,40 +442,26 @@ class Stage
             @num_monochromatic_blocks -= 1
           cell.mergeWith other, dir
           cell['merged' + dir] = true
-          return true
-    return false
+          return rec
+    return null
 
-  undo: ->
-    return if @busy or @history.length == 0
-    @busy = true
-    turn = @history.pop()
+  tryMove: (jelly, dir) ->
+    slide = @doSlide(jelly, dir)
+    return null unless slide
+    falls = @doFalls()
+    merges = @doMerges()
+    { slide, falls, merges }
 
-    # Step 1: Undo merges (instant, reverse order).
-    borders =
-      'left':  ['borderLeft',   'borderRight']
-      'right': ['borderRight',  'borderLeft']
-      'up':    ['borderTop',    'borderBottom']
-      'down':  ['borderBottom', 'borderTop']
-
-    for i in [turn.merges.length - 1..0] by -1
-      rec = turn.merges[i]
-
-      # Restore borders.
-      rec.cell.dom.style[borders[rec.dir][0]] = ''
-      rec.other.dom.style[borders[rec.dir][1]] = ''
-
-      # Unset merged flag.
+  undoMerges: (merges) ->
+    for i in [merges.length - 1..0] by -1
+      rec = merges[i]
       delete rec.cell['merged' + rec.dir]
-
-      # Restore color tracking.
       if rec.differentMaster
         @num_monochromatic_blocks += 1
         for cell in rec.otherMates
           cell.color_master = rec.otherMaster
         rec.cellMaster.color_mates = rec.cellMates.slice()
         rec.otherMaster.color_mates = rec.otherMates.slice()
-
-      # Split jellies back apart.
       if not rec.sameJelly
         absorber = rec.cell.jelly
         absorbedSet = new Set(rec.absorbedCells)
@@ -568,69 +471,98 @@ class Stage
           cell.jelly = rec.absorbedJelly
         absorber.immovable = rec.absorberImmovable
         @jellies.push(rec.absorbedJelly)
+    return
 
-    # Step 2: Undo falls (animated).
-    if turn.falls.length > 0
-      # Clear, move, repopulate.
-      for {jelly, dy} in turn.falls
-        @cells[y][x] = null for [x, y, cell] in jelly.cellCoords()
-      for {jelly, dy} in turn.falls
-        jelly.updatePosition(0, -dy)
-      for {jelly, dy} in turn.falls
-        @cells[y][x] = cell for [x, y, cell] in jelly.cellCoords()
-      @waitForAnimation =>
-        @undoSlide(turn)
-    else
-      @undoSlide(turn)
+  undoFalls: (falls) ->
+    return if falls.length == 0
+    @cells[y][x] = null for [x, y, cell] in jelly.cellCoords() for {jelly} in falls
+    jelly.updatePosition(0, -dy) for {jelly, dy} in falls
+    @cells[y][x] = cell for [x, y, cell] in jelly.cellCoords() for {jelly} in falls
+    return
 
-  undoSlide: (turn) ->
-    @move(turn.slide.jellies, -turn.slide.dx, 0)
-    @waitForAnimation =>
-      @busy = false
+  undoSlide: (slide) ->
+    @move(slide.jellies, -slide.dx, 0)
+    return
+
+  checkForCompletion: ->
+    if @num_monochromatic_blocks <= @num_colors
+      alert("Congratulations! Level completed.")
+    return
+
+
+########################################
+# View layer — DOM, events, animation
+########################################
 
 class Wall
   constructor: (@dom) ->
 
-class JellyCell
-  constructor: (@color, @x, @y) ->
-    @dom = document.createElement('div')
-    @dom.className = 'cell jelly ' + @color
-    moveToCell(@dom, @x, @y)
-    @color_master = this
-    @color_mates = [this]
+class Stage
+  constructor: (@dom, map) ->
+    @game = new GameState()
+    @history = []
+    @busy = false
+    @loadMap(map)
 
-  mergeWith: (other, dir) ->
-    borders = {
-      'left':  ['borderLeft',   'borderRight'],
-      'right': ['borderRight',  'borderLeft'],
-      'up':    ['borderTop',    'borderBottom'],
-      'down':  ['borderBottom', 'borderTop']
-    }
-    # Remove internal borders, whether merging with other jelly or wall.
-    @dom.style[borders[dir][0]] = 'none'
-    other.dom.style[borders[dir][1]] = 'none'
+    maybeSwallowEvent = (e) =>
+      e.preventDefault()
+      e.stopPropagation() if @busy
+    for event in ['contextmenu', 'click', 'touchstart', 'touchmove']
+      @dom.addEventListener(event, maybeSwallowEvent, true)
 
-    # If merging with wall, jelly becomes immovable.
-    @jelly.immovable = true if other instanceof Wall
+    # Initial merges from level setup (not recorded in history).
+    merges = @game.doMerges()
+    @applyMergeVisuals(merges)
 
-    # If merging with jelly, unify the jellies and color mates' lists.
-    if other instanceof JellyCell and @color == other.color and @color_master != other.color_master
-      other_master = other.color_master
-      for cell in other_master.color_mates
-        cell.color_master = @color_master
-      @color_master.color_mates =
-        @color_master.color_mates.concat(other_master.color_mates)
-    if other instanceof JellyCell and @jelly != other.jelly
-      @jelly.merge(other.jelly)
+  loadMap: (map) ->
+    anchors = []
+    if map[0] instanceof Array
+      anchors = map[1]
+      map = map[0]
 
+    table = document.createElement('table')
+    @dom.appendChild(table)
+    colors = {}
+    @game.cells = for y in [0...map.length]
+      row = map[y].split('')
+      tr = document.createElement('tr')
+      table.appendChild(tr)
+      for x in [0...row.length]
+        color = null
+        classname = 'transparent'
+        cell = null
+        td = document.createElement('td')
+        switch row[x]
+          when 'x'
+            classname = 'cell wall'
+            cell = new Wall(td)
+          when 'r' then color = 'red'
+          when 'g' then color = 'green'
+          when 'b' then color = 'blue'
+          when '0','1','2','3','4','5','6','7','8','9'
+            color = 'black' + row[x]
+        td.className = classname
+        tr.appendChild(td)
+        if color
+          cell = new GameCell(color, x, y)
+          jelly = new GameJelly(cell)
+          # Create DOM for this cell.
+          cell.dom = document.createElement('div')
+          cell.dom.className = 'cell jelly ' + color
+          moveToCell(cell.dom, x, y)
+          @dom.appendChild(cell.dom)
+          @addCellHandlers(cell)
+          @game.jellies.push jelly
+          @game.num_monochromatic_blocks += 1
+          @game.num_colors += 1 unless color of colors
+          colors[color] = 1
+        cell
+    @addBorders()
+    @placeAnchors(anchors)
+    return
 
-class Jelly
-  constructor: (stage, cell) ->
-    cell.jelly = this
-    @cells = [cell]
-    @immovable = false
-
-    # Use cell.jelly (not closure over this) so handlers follow merges.
+  addCellHandlers: (cell) ->
+    stage = this
     cell.dom.addEventListener 'contextmenu', (e) ->
       stage.trySlide(cell.jelly, 1)
     cell.dom.addEventListener 'click', (e) ->
@@ -643,25 +575,137 @@ class Jelly
         dx = Math.max(Math.min(dx, 1), -1)
         stage.trySlide(cell.jelly, dx)
 
-  cellCoords: ->
-    [cell.x, cell.y, cell] for cell in @cells
+  placeAnchors: (anchors) ->
+    directions =
+      'left':  [-1,  0, 'leftarrow', 'borderRightColor']
+      'right': [ 1,  0, 'rightarrow', 'borderLeftColor']
+      'up':    [ 0, -1, 'uparrow', 'borderBottomColor']
+      'down':  [ 0,  1, 'downarrow', 'borderTopColor']
+    anchorColors =
+      'red'  : 'hsl(0, 100%, 75%)'
+      'green': 'hsl(120, 100%, 45%)'
+      'blue' : 'hsl(216, 100%, 70%)'
+    for anchor in anchors
+      dx = directions[anchor.dir][0]
+      dy = directions[anchor.dir][1]
+      classname = directions[anchor.dir][2]
+      property = directions[anchor.dir][3]
 
-  updatePosition: (dx, dy) ->
-    for cell in @cells
-      cell.x += dx
-      cell.y += dy
-      moveToCell cell.dom, cell.x, cell.y
+      me = @game.cells[anchor.y][anchor.x]
+      other = @game.cells[anchor.y + dy][anchor.x + dx]
+      me.mergeWith(other, anchor.dir)
 
-  merge: (other) ->
-    for cell in other.cells
-      @cells.push cell
-      cell.jelly = this
-    @immovable = true if other.immovable
-    other.cells = null
+      # Remove borders visually for anchor merges.
+      if me.dom
+        me.dom.style[BORDERS[anchor.dir][0]] = 'none'
+      if other.dom
+        other.dom.style[BORDERS[anchor.dir][1]] = 'none'
+
+      # Create the overlapping anchoring triangle.
+      arrow = document.createElement('div')
+      arrow.style[property] = anchorColors[me.color]
+      arrow.className = classname
+      other.dom.appendChild(arrow)
+    @game.jellies = (jelly for jelly in @game.jellies when jelly.cells)
+
+  addBorders: ->
+    for y in [0...@game.cells.length]
+      for x in [0...@game.cells[0].length]
+        cell = @game.cells[y][x]
+        continue unless cell instanceof Wall
+        border = 'solid 1px #777'
+        edges = [
+          ['borderBottom',  0,  1],
+          ['borderTop',     0, -1],
+          ['borderLeft',   -1,  0],
+          ['borderRight',   1,  0],
+        ]
+        for [attr, dx, dy] in edges
+          continue unless 0 <= (y+dy) < @game.cells.length
+          continue unless 0 <= (x+dx) < @game.cells[0].length
+          other = @game.cells[y+dy][x+dx]
+          cell.dom.style[attr] = border unless other instanceof Wall
     return
 
+  syncDOM: ->
+    for jelly in @game.jellies
+      for cell in jelly.cells
+        moveToCell(cell.dom, cell.x, cell.y) if cell.dom
+    return
+
+  applyMergeVisuals: (merges) ->
+    for rec in merges
+      rec.cell.dom.style[BORDERS[rec.dir][0]] = 'none' if rec.cell.dom
+      rec.other.dom.style[BORDERS[rec.dir][1]] = 'none' if rec.other.dom
+    return
+
+  undoMergeVisuals: (merges) ->
+    for i in [merges.length - 1..0] by -1
+      rec = merges[i]
+      rec.cell.dom.style[BORDERS[rec.dir][0]] = '' if rec.cell.dom
+      rec.other.dom.style[BORDERS[rec.dir][1]] = '' if rec.other.dom
+    return
+
+  waitForAnimation: (cb) ->
+    names = ['transitionend', 'webkitTransitionEnd']
+    end = () =>
+      @dom.removeEventListener(name, end) for name in names
+      setTimeout(cb, 0)
+    @dom.addEventListener(name, end) for name in names
+    return
+
+  trySlide: (jelly, dir) ->
+    return if @busy
+    slide = @game.doSlide(jelly, dir)
+    return unless slide
+    @busy = true
+    turn = { slide }
+    @history.push(turn)
+    @syncDOM()
+    @waitForAnimation =>
+      turn.falls = @game.doFalls()
+      @syncDOM()
+      afterFall = =>
+        turn.merges = @game.doMerges()
+        @applyMergeVisuals(turn.merges)
+        @busy = false
+      if turn.falls.length > 0
+        @waitForAnimation afterFall
+      else
+        afterFall()
+
+  undo: ->
+    return if @busy or @history.length == 0
+    @busy = true
+    turn = @history.pop()
+
+    # Step 1: Undo merge visuals + game state.
+    @undoMergeVisuals(turn.merges)
+    @game.undoMerges(turn.merges)
+
+    # Step 2: Undo falls (animated).
+    @game.undoFalls(turn.falls)
+    @syncDOM()
+
+    undoSlideStep = =>
+      # Step 3: Undo slide (animated).
+      @game.undoSlide(turn.slide)
+      @syncDOM()
+      @waitForAnimation =>
+        @busy = false
+
+    if turn.falls.length > 0
+      @waitForAnimation undoSlideStep
+    else
+      undoSlideStep()
+
+
+########################################
+# Initialization
+########################################
+
 level = parseInt(location.search.substr(1), 10) or 1
-stage = new Stage(document.getElementById('map'), levels[level-1], levels[level-1])
+stage = new Stage(document.getElementById('map'), levels[level-1])
 window.stage = stage
 
 levelPicker = document.getElementById('level')
@@ -681,4 +725,4 @@ document.addEventListener 'keydown', (e) ->
 
 document.getElementById('reset').addEventListener 'click', ->
   stage.dom.innerHTML = ''
-  stage = new Stage(stage.dom, levels[level-1], levels[level-1])
+  stage = new Stage(stage.dom, levels[level-1])
