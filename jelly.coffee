@@ -302,7 +302,8 @@ class Stage
       map = map[0]
     @num_monochromatic_blocks = 0
     @num_colors = 0
-    @moveHistory = []
+    @history = []
+    @currentTurn = null
     @loadMap(map, anchors)
 
     # Capture and swallow all click events during animations.
@@ -415,43 +416,16 @@ class Stage
   trySlide: (jelly, dir) ->
     jellies = [jelly]
     return if @checkFilled(jellies, dir, 0)
-    coords = jelly.cellCoords()[0]
-    @moveHistory.push({x: coords[0], y: coords[1], dir: dir})
+    turn = { slide: { jellies: jellies.slice(), dx: dir }, falls: [], merges: [] }
+    @currentTurn = turn
+    @history.push(turn)
     @busy = true
     @move(jellies, dir, 0)
     @waitForAnimation () =>
       @checkFall =>
         @checkForMerges()
+        @currentTurn = null
         @busy = false
-
-  trySlideInstant: (jelly, dir) ->
-    jellies = [jelly]
-    return if @checkFilled(jellies, dir, 0)
-    @move(jellies, dir, 0)
-    @instantFall()
-    @checkForMerges()
-
-  instantFall: ->
-    try_again = true
-    while try_again
-      try_again = false
-      for jelly in @jellies
-        jellyset = [jelly]
-        if not @checkFilled(jellyset, 0, 1)
-          @move(jellyset, 0, 1)
-          try_again = true
-
-  undo: ->
-    return if @busy or @moveHistory.length == 0
-    history = @moveHistory.slice(0, -1)
-    @dom.innerHTML = ''
-    newStage = new Stage(@dom, @levelData, @levelData)
-    for entry in history
-      cell = newStage.cells[entry.y][entry.x]
-      if cell and cell.jelly
-        newStage.trySlideInstant(cell.jelly, entry.dir)
-    newStage.moveHistory = history
-    return newStage
 
   move: (jellies, dx, dy) ->
     @cells[y][x] = null for [x, y, cell] in jelly.cellCoords() for jelly in jellies
@@ -476,6 +450,11 @@ class Stage
     return false
 
   checkFall: (cb) ->
+    # Snapshot positions before falling.
+    preFall = new Map()
+    for jelly in @jellies
+      preFall.set(jelly, jelly.cells[0].y)
+
     moved = false
     try_again = true
     while try_again
@@ -486,6 +465,14 @@ class Stage
           @move(jellyset, 0, 1)
           try_again = true
           moved = true
+
+    # Record fall distances.
+    if @currentTurn
+      for jelly in @jellies
+        oldY = preFall.get(jelly)
+        dy = jelly.cells[0].y - oldY
+        @currentTurn.falls.push({jelly, dy}) if dy > 0
+
     if moved
       @waitForAnimation cb
     else
@@ -514,6 +501,24 @@ class Stage
           continue unless other and other instanceof JellyCell
           continue if cell['merged' + dir]
           continue unless other.color == cell.color
+
+          # Record merge before it happens.
+          if @currentTurn
+            sameJelly = jelly == other.jelly
+            @currentTurn.merges.push
+              cell: cell
+              other: other
+              dir: dir
+              sameJelly: sameJelly
+              absorbedJelly: if sameJelly then null else other.jelly
+              absorbedCells: if sameJelly then null else other.jelly.cells.slice()
+              absorberImmovable: jelly.immovable
+              differentMaster: cell.color_master != other.color_master
+              cellMaster: cell.color_master
+              cellMates: cell.color_master.color_mates.slice()
+              otherMaster: other.color_master
+              otherMates: other.color_master.color_mates.slice()
+
           if jelly != other.jelly
             @jellies = @jellies.filter (j) -> j != other.jelly
           if cell.color_master != other.color_master
@@ -522,6 +527,66 @@ class Stage
           cell['merged' + dir] = true
           return true
     return false
+
+  undo: ->
+    return if @busy or @history.length == 0
+    @busy = true
+    turn = @history.pop()
+
+    # Step 1: Undo merges (instant, reverse order).
+    borders =
+      'left':  ['borderLeft',   'borderRight']
+      'right': ['borderRight',  'borderLeft']
+      'up':    ['borderTop',    'borderBottom']
+      'down':  ['borderBottom', 'borderTop']
+
+    for i in [turn.merges.length - 1..0] by -1
+      rec = turn.merges[i]
+
+      # Restore borders.
+      rec.cell.dom.style[borders[rec.dir][0]] = ''
+      rec.other.dom.style[borders[rec.dir][1]] = ''
+
+      # Unset merged flag.
+      delete rec.cell['merged' + rec.dir]
+
+      # Restore color tracking.
+      if rec.differentMaster
+        @num_monochromatic_blocks += 1
+        for cell in rec.otherMates
+          cell.color_master = rec.otherMaster
+        rec.cellMaster.color_mates = rec.cellMates.slice()
+        rec.otherMaster.color_mates = rec.otherMates.slice()
+
+      # Split jellies back apart.
+      if not rec.sameJelly
+        absorber = rec.cell.jelly
+        absorbedSet = new Set(rec.absorbedCells)
+        absorber.cells = absorber.cells.filter (c) -> not absorbedSet.has(c)
+        rec.absorbedJelly.cells = rec.absorbedCells
+        for cell in rec.absorbedCells
+          cell.jelly = rec.absorbedJelly
+        absorber.immovable = rec.absorberImmovable
+        @jellies.push(rec.absorbedJelly)
+
+    # Step 2: Undo falls (animated).
+    if turn.falls.length > 0
+      # Clear, move, repopulate.
+      for {jelly, dy} in turn.falls
+        @cells[y][x] = null for [x, y, cell] in jelly.cellCoords()
+      for {jelly, dy} in turn.falls
+        jelly.updatePosition(0, -dy)
+      for {jelly, dy} in turn.falls
+        @cells[y][x] = cell for [x, y, cell] in jelly.cellCoords()
+      @waitForAnimation =>
+        @undoSlide(turn)
+    else
+      @undoSlide(turn)
+
+  undoSlide: (turn) ->
+    @move(turn.slide.jellies, -turn.slide.dx, 0)
+    @waitForAnimation =>
+      @busy = false
 
 class Wall
   constructor: (@dom) ->

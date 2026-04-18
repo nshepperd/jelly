@@ -417,7 +417,8 @@
       }
       this.num_monochromatic_blocks = 0;
       this.num_colors = 0;
-      this.moveHistory = [];
+      this.history = [];
+      this.currentTurn = null;
       this.loadMap(map, anchors);
       // Capture and swallow all click events during animations.
       this.busy = false;
@@ -596,81 +597,30 @@
     }
 
     trySlide(jelly, dir) {
-      var coords, jellies;
+      var jellies, turn;
       jellies = [jelly];
       if (this.checkFilled(jellies, dir, 0)) {
         return;
       }
-      coords = jelly.cellCoords()[0];
-      this.moveHistory.push({
-        x: coords[0],
-        y: coords[1],
-        dir: dir
-      });
+      turn = {
+        slide: {
+          jellies: jellies.slice(),
+          dx: dir
+        },
+        falls: [],
+        merges: []
+      };
+      this.currentTurn = turn;
+      this.history.push(turn);
       this.busy = true;
       this.move(jellies, dir, 0);
       return this.waitForAnimation(() => {
         return this.checkFall(() => {
           this.checkForMerges();
+          this.currentTurn = null;
           return this.busy = false;
         });
       });
-    }
-
-    trySlideInstant(jelly, dir) {
-      var jellies;
-      jellies = [jelly];
-      if (this.checkFilled(jellies, dir, 0)) {
-        return;
-      }
-      this.move(jellies, dir, 0);
-      this.instantFall();
-      return this.checkForMerges();
-    }
-
-    instantFall() {
-      var jelly, jellyset, results, try_again;
-      try_again = true;
-      results = [];
-      while (try_again) {
-        try_again = false;
-        results.push((function() {
-          var k, len, ref, results1;
-          ref = this.jellies;
-          results1 = [];
-          for (k = 0, len = ref.length; k < len; k++) {
-            jelly = ref[k];
-            jellyset = [jelly];
-            if (!this.checkFilled(jellyset, 0, 1)) {
-              this.move(jellyset, 0, 1);
-              results1.push(try_again = true);
-            } else {
-              results1.push(void 0);
-            }
-          }
-          return results1;
-        }).call(this));
-      }
-      return results;
-    }
-
-    undo() {
-      var cell, entry, history, k, len, newStage;
-      if (this.busy || this.moveHistory.length === 0) {
-        return;
-      }
-      history = this.moveHistory.slice(0, -1);
-      this.dom.innerHTML = '';
-      newStage = new Stage(this.dom, this.levelData, this.levelData);
-      for (k = 0, len = history.length; k < len; k++) {
-        entry = history[k];
-        cell = newStage.cells[entry.y][entry.x];
-        if (cell && cell.jelly) {
-          newStage.trySlideInstant(cell.jelly, entry.dir);
-        }
-      }
-      newStage.moveHistory = history;
-      return newStage;
     }
 
     move(jellies, dx, dy) {
@@ -730,19 +680,38 @@
     }
 
     checkFall(cb) {
-      var jelly, jellyset, k, len, moved, ref, try_again;
+      var dy, jelly, jellyset, k, l, len, len1, len2, m, moved, oldY, preFall, ref, ref1, ref2, try_again;
+      // Snapshot positions before falling.
+      preFall = new Map();
+      ref = this.jellies;
+      for (k = 0, len = ref.length; k < len; k++) {
+        jelly = ref[k];
+        preFall.set(jelly, jelly.cells[0].y);
+      }
       moved = false;
       try_again = true;
       while (try_again) {
         try_again = false;
-        ref = this.jellies;
-        for (k = 0, len = ref.length; k < len; k++) {
-          jelly = ref[k];
+        ref1 = this.jellies;
+        for (l = 0, len1 = ref1.length; l < len1; l++) {
+          jelly = ref1[l];
           jellyset = [jelly];
           if (!this.checkFilled(jellyset, 0, 1)) {
             this.move(jellyset, 0, 1);
             try_again = true;
             moved = true;
+          }
+        }
+      }
+      // Record fall distances.
+      if (this.currentTurn) {
+        ref2 = this.jellies;
+        for (m = 0, len2 = ref2.length; m < len2; m++) {
+          jelly = ref2[m];
+          oldY = preFall.get(jelly);
+          dy = jelly.cells[0].y - oldY;
+          if (dy > 0) {
+            this.currentTurn.falls.push({jelly, dy});
           }
         }
       }
@@ -771,7 +740,7 @@
     }
 
     doOneMerge() {
-      var cell, dir, dx, dy, jelly, k, l, len, len1, len2, m, other, ref, ref1, ref2, x, y;
+      var cell, dir, dx, dy, jelly, k, l, len, len1, len2, m, other, ref, ref1, ref2, sameJelly, x, y;
       ref = this.jellies;
       for (k = 0, len = ref.length; k < len; k++) {
         jelly = ref[k];
@@ -793,6 +762,24 @@
             if (other.color !== cell.color) {
               continue;
             }
+            // Record merge before it happens.
+            if (this.currentTurn) {
+              sameJelly = jelly === other.jelly;
+              this.currentTurn.merges.push({
+                cell: cell,
+                other: other,
+                dir: dir,
+                sameJelly: sameJelly,
+                absorbedJelly: sameJelly ? null : other.jelly,
+                absorbedCells: sameJelly ? null : other.jelly.cells.slice(),
+                absorberImmovable: jelly.immovable,
+                differentMaster: cell.color_master !== other.color_master,
+                cellMaster: cell.color_master,
+                cellMates: cell.color_master.color_mates.slice(),
+                otherMaster: other.color_master,
+                otherMates: other.color_master.color_mates.slice()
+              });
+            }
             if (jelly !== other.jelly) {
               this.jellies = this.jellies.filter(function(j) {
                 return j !== other.jelly;
@@ -808,6 +795,96 @@
         }
       }
       return false;
+    }
+
+    undo() {
+      var absorbedSet, absorber, borders, cell, dy, i, jelly, k, l, len, len1, len2, len3, len4, len5, len6, m, n, o, p, q, r, rec, ref, ref1, ref2, ref3, ref4, ref5, ref6, ref7, turn, x, y;
+      if (this.busy || this.history.length === 0) {
+        return;
+      }
+      this.busy = true;
+      turn = this.history.pop();
+      // Step 1: Undo merges (instant, reverse order).
+      borders = {
+        'left': ['borderLeft', 'borderRight'],
+        'right': ['borderRight', 'borderLeft'],
+        'up': ['borderTop', 'borderBottom'],
+        'down': ['borderBottom', 'borderTop']
+      };
+      for (i = k = ref = turn.merges.length - 1; k >= 0; i = k += -1) {
+        rec = turn.merges[i];
+        // Restore borders.
+        rec.cell.dom.style[borders[rec.dir][0]] = '';
+        rec.other.dom.style[borders[rec.dir][1]] = '';
+        // Unset merged flag.
+        delete rec.cell['merged' + rec.dir];
+        // Restore color tracking.
+        if (rec.differentMaster) {
+          this.num_monochromatic_blocks += 1;
+          ref1 = rec.otherMates;
+          for (l = 0, len = ref1.length; l < len; l++) {
+            cell = ref1[l];
+            cell.color_master = rec.otherMaster;
+          }
+          rec.cellMaster.color_mates = rec.cellMates.slice();
+          rec.otherMaster.color_mates = rec.otherMates.slice();
+        }
+        // Split jellies back apart.
+        if (!rec.sameJelly) {
+          absorber = rec.cell.jelly;
+          absorbedSet = new Set(rec.absorbedCells);
+          absorber.cells = absorber.cells.filter(function(c) {
+            return !absorbedSet.has(c);
+          });
+          rec.absorbedJelly.cells = rec.absorbedCells;
+          ref2 = rec.absorbedCells;
+          for (m = 0, len1 = ref2.length; m < len1; m++) {
+            cell = ref2[m];
+            cell.jelly = rec.absorbedJelly;
+          }
+          absorber.immovable = rec.absorberImmovable;
+          this.jellies.push(rec.absorbedJelly);
+        }
+      }
+      // Step 2: Undo falls (animated).
+      if (turn.falls.length > 0) {
+        ref3 = turn.falls;
+        // Clear, move, repopulate.
+        for (n = 0, len2 = ref3.length; n < len2; n++) {
+          ({jelly, dy} = ref3[n]);
+          ref4 = jelly.cellCoords();
+          for (o = 0, len3 = ref4.length; o < len3; o++) {
+            [x, y, cell] = ref4[o];
+            this.cells[y][x] = null;
+          }
+        }
+        ref5 = turn.falls;
+        for (p = 0, len4 = ref5.length; p < len4; p++) {
+          ({jelly, dy} = ref5[p]);
+          jelly.updatePosition(0, -dy);
+        }
+        ref6 = turn.falls;
+        for (q = 0, len5 = ref6.length; q < len5; q++) {
+          ({jelly, dy} = ref6[q]);
+          ref7 = jelly.cellCoords();
+          for (r = 0, len6 = ref7.length; r < len6; r++) {
+            [x, y, cell] = ref7[r];
+            this.cells[y][x] = cell;
+          }
+        }
+        return this.waitForAnimation(() => {
+          return this.undoSlide(turn);
+        });
+      } else {
+        return this.undoSlide(turn);
+      }
+    }
+
+    undoSlide(turn) {
+      this.move(turn.slide.jellies, -turn.slide.dx, 0);
+      return this.waitForAnimation(() => {
+        return this.busy = false;
+      });
     }
 
   };
