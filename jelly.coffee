@@ -353,6 +353,7 @@ class GameState
     @jellies = []
     @num_monochromatic_blocks = 0
     @num_colors = 0
+    @silent = false
 
   move: (jellies, dx, dy) ->
     @cells[y][x] = null for [x, y, cell] in jelly.cellCoords() for jelly in jellies
@@ -484,7 +485,53 @@ class GameState
     @move(slide.jellies, -slide.dx, 0)
     return
 
+  clone: ->
+    state = new GameState()
+    state.silent = true
+    cellMap = new Map()
+
+    # Clone all game cells.
+    for jelly in @jellies
+      for cell in jelly.cells
+        newCell = new GameCell(cell.color, cell.x, cell.y)
+        newCell['mergedright'] = true if cell['mergedright']
+        newCell['mergeddown'] = true if cell['mergeddown']
+        cellMap.set(cell, newCell)
+
+    # Clone jellies.
+    state.jellies = for jelly in @jellies
+      newJelly = new GameJelly(cellMap.get(jelly.cells[0]))
+      for i in [1...jelly.cells.length]
+        c = cellMap.get(jelly.cells[i])
+        c.jelly = newJelly
+        newJelly.cells.push(c)
+      newJelly.immovable = jelly.immovable
+      newJelly
+
+    # Fix up color_master and rebuild color_mates.
+    masterMap = new Map()
+    for jelly in @jellies
+      for cell in jelly.cells
+        newCell = cellMap.get(cell)
+        newCell.color_master = cellMap.get(cell.color_master)
+        master = newCell.color_master
+        if not masterMap.has(master)
+          masterMap.set(master, [])
+        masterMap.get(master).push(newCell)
+    masterMap.forEach (mates, master) ->
+      master.color_mates = mates
+
+    # Clone cells grid (Walls and nulls are shared).
+    state.cells = for row in @cells
+      for cell in row
+        if cellMap.has(cell) then cellMap.get(cell) else cell
+
+    state.num_monochromatic_blocks = @num_monochromatic_blocks
+    state.num_colors = @num_colors
+    state
+
   checkForCompletion: ->
+    return if @silent
     if @num_monochromatic_blocks <= @num_colors
       alert("Congratulations! Level completed.")
     return

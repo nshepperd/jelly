@@ -499,6 +499,7 @@
       this.jellies = [];
       this.num_monochromatic_blocks = 0;
       this.num_colors = 0;
+      this.silent = false;
     }
 
     move(jellies, dx, dy) {
@@ -748,7 +749,98 @@
       this.move(slide.jellies, -slide.dx, 0);
     }
 
+    clone() {
+      var c, cell, cellMap, i, jelly, k, l, len, len1, len2, len3, m, master, masterMap, n, newCell, newJelly, ref, ref1, ref2, ref3, row, state;
+      state = new GameState();
+      state.silent = true;
+      cellMap = new Map();
+      ref = this.jellies;
+      // Clone all game cells.
+      for (k = 0, len = ref.length; k < len; k++) {
+        jelly = ref[k];
+        ref1 = jelly.cells;
+        for (l = 0, len1 = ref1.length; l < len1; l++) {
+          cell = ref1[l];
+          newCell = new GameCell(cell.color, cell.x, cell.y);
+          if (cell['mergedright']) {
+            newCell['mergedright'] = true;
+          }
+          if (cell['mergeddown']) {
+            newCell['mergeddown'] = true;
+          }
+          cellMap.set(cell, newCell);
+        }
+      }
+      // Clone jellies.
+      state.jellies = (function() {
+        var len2, m, n, ref2, ref3, results;
+        ref2 = this.jellies;
+        results = [];
+        for (m = 0, len2 = ref2.length; m < len2; m++) {
+          jelly = ref2[m];
+          newJelly = new GameJelly(cellMap.get(jelly.cells[0]));
+          for (i = n = 1, ref3 = jelly.cells.length; (1 <= ref3 ? n < ref3 : n > ref3); i = 1 <= ref3 ? ++n : --n) {
+            c = cellMap.get(jelly.cells[i]);
+            c.jelly = newJelly;
+            newJelly.cells.push(c);
+          }
+          newJelly.immovable = jelly.immovable;
+          results.push(newJelly);
+        }
+        return results;
+      }).call(this);
+      // Fix up color_master and rebuild color_mates.
+      masterMap = new Map();
+      ref2 = this.jellies;
+      for (m = 0, len2 = ref2.length; m < len2; m++) {
+        jelly = ref2[m];
+        ref3 = jelly.cells;
+        for (n = 0, len3 = ref3.length; n < len3; n++) {
+          cell = ref3[n];
+          newCell = cellMap.get(cell);
+          newCell.color_master = cellMap.get(cell.color_master);
+          master = newCell.color_master;
+          if (!masterMap.has(master)) {
+            masterMap.set(master, []);
+          }
+          masterMap.get(master).push(newCell);
+        }
+      }
+      masterMap.forEach(function(mates, master) {
+        return master.color_mates = mates;
+      });
+      // Clone cells grid (Walls and nulls are shared).
+      state.cells = (function() {
+        var len4, o, ref4, results;
+        ref4 = this.cells;
+        results = [];
+        for (o = 0, len4 = ref4.length; o < len4; o++) {
+          row = ref4[o];
+          results.push((function() {
+            var len5, p, results1;
+            results1 = [];
+            for (p = 0, len5 = row.length; p < len5; p++) {
+              cell = row[p];
+              if (cellMap.has(cell)) {
+                results1.push(cellMap.get(cell));
+              } else {
+                results1.push(cell);
+              }
+            }
+            return results1;
+          })());
+        }
+        return results;
+      }).call(this);
+      state.num_monochromatic_blocks = this.num_monochromatic_blocks;
+      state.num_colors = this.num_colors;
+      return state;
+    }
+
     checkForCompletion() {
+      if (this.silent) {
+        return;
+      }
       if (this.num_monochromatic_blocks <= this.num_colors) {
         alert("Congratulations! Level completed.");
       }
