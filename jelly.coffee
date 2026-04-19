@@ -721,6 +721,7 @@ class Stage
     @dragState =
       cell: cell
       startX: startX
+      startTime: Date.now()
       lastDx: 0
       ghostCells: []
       mode: mode
@@ -804,9 +805,19 @@ class Stage
 
     dx = @dragState.lastDx
     cell = @dragState.cell
+    mode = @dragState.mode
+    duration = Date.now() - @dragState.startTime
     @dragState = null
 
     return if dx == 0
+
+    # On touch, distinguish tap vs swipe vs drag.
+    if mode == 'touch' and duration < 300
+      if Math.abs(dx) <= 1
+        # Tap — too short and small to be intentional.
+        return
+      # Swipe — quick flick, move exactly 1 space.
+      dx = if dx > 0 then 1 else -1
 
     # Execute actual moves with animation.
     dir = if dx > 0 then 1 else -1

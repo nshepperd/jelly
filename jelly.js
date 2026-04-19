@@ -1146,6 +1146,7 @@
       this.dragState = {
         cell: cell,
         startX: startX,
+        startTime: Date.now(),
         lastDx: 0,
         ghostCells: [],
         mode: mode
@@ -1261,7 +1262,7 @@
     }
 
     endDrag() {
-      var cell, count, dir, dom, dx, k, len, ref;
+      var cell, count, dir, dom, duration, dx, k, len, mode, ref;
       if (this.dragState.mode === 'mouse') {
         document.removeEventListener('mousemove', this._onMove);
         document.removeEventListener('mouseup', this._onEnd);
@@ -1278,9 +1279,20 @@
       this.dom.classList.remove('dragging');
       dx = this.dragState.lastDx;
       cell = this.dragState.cell;
+      mode = this.dragState.mode;
+      duration = Date.now() - this.dragState.startTime;
       this.dragState = null;
       if (dx === 0) {
         return;
+      }
+      // On touch, distinguish tap vs swipe vs drag.
+      if (mode === 'touch' && duration < 300) {
+        if (Math.abs(dx) <= 1) {
+          return;
+        }
+        // Swipe — quick flick, move exactly 1 space.
+        // Tap — too short and small to be intentional.
+        dx = dx > 0 ? 1 : -1;
       }
       // Execute actual moves with animation.
       dir = dx > 0 ? 1 : -1;
